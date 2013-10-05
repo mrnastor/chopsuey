@@ -1,11 +1,10 @@
 <?php
 
-require_once(dirname(dirname(__FILE__)) . '/settings/encode_setting.inc.php');
+require_once(dirname(dirname(__FILE__)) . 'encode_setting.inc.php');
 require_once(dirname(dirname(__FILE__)) . '/libs/predis/autoload.php');
 
 class EncodeManager{
 
-	static  $status_strings = array();
 	const STATUS_WAITING 				= 0;
 	const STATUS_DOWNLOADING			= 1;
 	const STATUS_DOWNLOADED				= 2;
@@ -42,27 +41,11 @@ class EncodeManager{
 	const RETURN_ERROR_PARAMETERS		=-7;
 	const RETURN_ERROR_LOCALCOPYFAIL	=-8;
 	
-	const PREPEND = "sportslife";
+	const PREPEND = "encoder";
 	var $predisObj = null;
 	
 	function __construct(){
 		$this->predisObj = new Predis\Client();
-		self::$status_strings = array();
-		self::$status_strings[self::STATUS_WAITING] ="待ち";
-		self::$status_strings[self::STATUS_DOWNLOADING] ="ダウンロード中";
-		self::$status_strings[self::STATUS_DOWNLOADED] ="ダウンロードス終了";
-		self::$status_strings[self::STATUS_ENCODING_HLS] ="iOS　エンコード中";
-		self::$status_strings[self::STATUS_ENCODING_HLS_DONE] ="iOS　エンコード終了";
-		self::$status_strings[self::STATUS_ENCODING_MP4] ="Android　エンコード中";
-		self::$status_strings[self::STATUS_ENCODING_MP4_DONE] ="Android　エンコード終了";
-		self::$status_strings[self::STATUS_ENCODING_HLS_ERROR] ="iOS　エンコード　エラー";
-		self::$status_strings[self::STATUS_ENCODING_MP4_ERROR] ="Android　エンコード　エラー";
-		self::$status_strings[self::STATUS_UPLOADING] ="配信サーバーへアップロード中";
-		self::$status_strings[self::STATUS_UPLOADING_DONE] ="配信サーバーへアップロード終了";
-		self::$status_strings[self::STATUS_UNK_ERROR] ="システム　エラー";
-		self::$status_strings[self::STATUS_DOWNLOAD_ERROR] ="ダウンロード　エラー";
-		self::$status_strings[self::STATUS_UPLOAD_ERROR] ="アップロード　エラー";
-		self::$status_strings[self::STATUS_CANCELLED] ="キャンセル終了";
 	}
 	
 	//HELPER FUNCTIONS
@@ -129,18 +112,18 @@ class EncodeManager{
 			$strLogInsert .= $strLogNow .' '.  EncodeManager::LOG_KEY_SRCPATH. ' ' . $strSrcPath . "\r\n";
 		}
 		
-		$ret = file_put_contents( SPORTSLIFE_ONGOING_FOLDER . $strJobID . '.log', $strLogInsert, FILE_APPEND);
+		$ret = file_put_contents( ONGOING_FOLDER . $strJobID . '.log', $strLogInsert, FILE_APPEND);
 		if( !$ret ){
 			return EncodeManager::RETURN_ERROR_FOLDERCREATE;
 		}else{
-			chmod ( SPORTSLIFE_ONGOING_FOLDER . $strJobID . '.log' , 0777 );
+			chmod ( ONGOING_FOLDER . $strJobID . '.log' , 0777 );
 		}
 		
 		if( strpos ( $strFilePath , "ftp://" ) === false ){
-			exec(SPORTSLIFE_COPY_COMMAND . $strFilePath . ' '. WORKFOLDER_DIR . $strJobID );
-			$ret = $this->predisObj->RPUSH( SPORTSLIFE_REDIS_ENCODE_WAITING , $strJobID );
+			exec(COPY_COMMAND . $strFilePath . ' '. WORKFOLDER_DIR . $strJobID );
+			$ret = $this->predisObj->RPUSH( REDIS_ENCODE_WAITING , $strJobID );
 		}else{
-			$ret = $this->predisObj->RPUSH( SPORTSLIFE_REDIS_WAITING , $strJobID );
+			$ret = $this->predisObj->RPUSH( REDIS_WAITING , $strJobID );
 		}
 
 		umask($old_umask);
@@ -166,10 +149,10 @@ class EncodeManager{
 		}
 		
 		//Check if job log file exists
-		if( file_exists(SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log') === true ){
-			$strLogFilePath = SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log';
-		}else if( file_exists(SPORTSLIFE_FINISHED_FOLDER . $strJobId . '.log') === true ){
-			$strLogFilePath = SPORTSLIFE_FINISHED_FOLDER . $strJobId . '.log';
+		if( file_exists(ONGOING_FOLDER . $strJobId . '.log') === true ){
+			$strLogFilePath = ONGOING_FOLDER . $strJobId . '.log';
+		}else if( file_exists(FINISHED_FOLDER . $strJobId . '.log') === true ){
+			$strLogFilePath = FINISHED_FOLDER . $strJobId . '.log';
 		}else{
 			
 			$arrRet["job_id"] = $strJobId;
@@ -251,9 +234,9 @@ class EncodeManager{
 		$arrPids = array_filter($arrPids, 'strlen');
 		$iRecentPid = $arrPids[sizeof($arrPids)-3];
 
-		$this->predisObj->SREM( SPORTSLIFE_REDIS_ENCODING , $strJobId );
-		$this->predisObj->SREM( SPORTSLIFE_REDIS_DOWNLOADING , $strJobId );
-		$this->predisObj->SREM( SPORTSLIFE_REDIS_UPLOADING , $strJobId );
+		$this->predisObj->SREM( REDIS_ENCODING , $strJobId );
+		$this->predisObj->SREM( REDIS_DOWNLOADING , $strJobId );
+		$this->predisObj->SREM( REDIS_UPLOADING , $strJobId );
 		
 		//if( EncodeManager::isRunning($iRecentPid) ){
 			
@@ -265,7 +248,7 @@ class EncodeManager{
 			
 			$strLogNow = @date("Y-m-d H:i:s", time());
 			$strLogInsert = $strLogNow .' '.  EncodeManager::LOG_KEY_STATUS. ' ' . EncodeManager::STATUS_CANCELLED. "\r\n";
-			$ret = file_put_contents( SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log', $strLogInsert, FILE_APPEND);
+			$ret = file_put_contents( ONGOING_FOLDER . $strJobId . '.log', $strLogInsert, FILE_APPEND);
 			if( !$ret ){
 				return EncodeManager::RETURN_ERROR_FILECREATE;
 			}			
@@ -287,18 +270,18 @@ class EncodeManager{
 	public function getEncodeQueue(){
 		
 		//Check if finished folder exists
-		if( is_dir( SPORTSLIFE_FINISHED_FOLDER ) === false ){
+		if( is_dir( FINISHED_FOLDER ) === false ){
 			return EncodeManager::RETURN_ERROR_FOLDERNOTFOUND;
 		}
 		
 		//Check if ongoing folder exists
-		if( is_dir( SPORTSLIFE_ONGOING_FOLDER ) === false ){
+		if( is_dir( ONGOING_FOLDER ) === false ){
 			return EncodeManager::RETURN_ERROR_FOLDERNOTFOUND;
 		}
 		
 		$arrRet = array();
 		
-		if ($strDirlist = opendir(SPORTSLIFE_ONGOING_FOLDER))
+		if ($strDirlist = opendir(ONGOING_FOLDER))
 		{
 			while(($filename = readdir($strDirlist)) !== false)
 			{
@@ -309,7 +292,7 @@ class EncodeManager{
 			closedir($strDirlist);
 		}
 
-		if ($strDirlist = opendir(SPORTSLIFE_FINISHED_FOLDER))
+		if ($strDirlist = opendir(FINISHED_FOLDER))
 		{
 			while(($filename = readdir($strDirlist)) !== false)
 			{
@@ -346,7 +329,7 @@ class EncodeManager{
 		}
 		
 		//Check if logfile exists
-		$strLogfile = SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log';
+		$strLogfile = ONGOING_FOLDER . $strJobId . '.log';
 		if( file_exists($strLogfile) === false ){
 			return EncodeManager::RETURN_ERROR_FILENOTFOUND;
 		}
@@ -356,7 +339,7 @@ class EncodeManager{
 		$pidfile = WORKFOLDER_DIR. $strJobId . "/pid.txt";
 		$encode_logfile= WORKFOLDER_DIR. $strJobId. "/proc.log";
 		$outputfolder = WORKFOLDER_DIR. $strJobId ."/";
-		$cmd = SPORTSLIFE_ENCODE_COMMAND. " $strLocaFilePath $strOutputPrefix $strLogfile $encode_logfile $outputfolder $strJobId";
+		$cmd = ENCODE_COMMAND. " $strLocaFilePath $strOutputPrefix $strLogfile $encode_logfile $outputfolder $strJobId";
 		exec(sprintf("%s > %s 2>&1 & echo $! >> %s", $cmd, $outputfile, $pidfile));
 		file_put_contents($pidfile, $encode_logfile . "\r\n" . $outputfile . "\r\n" , FILE_APPEND);
 		
@@ -388,7 +371,7 @@ class EncodeManager{
 		}
 		
 		//Check if logfile exists
-		$strLogfile = SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log';
+		$strLogfile = ONGOING_FOLDER . $strJobId . '.log';
 		if( file_exists($strLogfile) === false ){
 			return EncodeManager::RETURN_ERROR_FILENOTFOUND;
 		}
@@ -397,7 +380,7 @@ class EncodeManager{
 		$pidfile = WORKFOLDER_DIR. $strJobId . "/pid.txt";
 		$process_logfile= WORKFOLDER_DIR. $strJobId. "/proc.log";
 		$outputfolder = WORKFOLDER_DIR. $strJobId ."/";
-		$cmd = SPORTSLIFE_DOWNLOAD_COMMAND. " $strFtpFilePath $strJobId $strLogfile $process_logfile";
+		$cmd = DOWNLOAD_COMMAND. " $strFtpFilePath $strJobId $strLogfile $process_logfile";
 		exec(sprintf("%s > %s 2>&1 & echo $! >> %s", $cmd, $outputfile, $pidfile));
 		file_put_contents($pidfile, $process_logfile . "\r\n" . $outputfile . "\r\n" , FILE_APPEND);
 		
@@ -428,7 +411,7 @@ class EncodeManager{
 		}
 		
 		//Check if logfile exists
-		$strLogfile = SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log';
+		$strLogfile = ONGOING_FOLDER . $strJobId . '.log';
 		if( file_exists($strLogfile) === false ){
 			return EncodeManager::RETURN_ERROR_FILENOTFOUND;
 		}
@@ -437,7 +420,7 @@ class EncodeManager{
 		$pidfile = WORKFOLDER_DIR. $strJobId . "/pid.txt";
 		$process_logfile= WORKFOLDER_DIR. $strJobId. "/proc.log";
 		$outputfolder = WORKFOLDER_DIR. $strJobId ."/";
-		$cmd = SPORTSLIFE_UPLOAD_COMMAND. " $strJobId $strMovieId $strPrefix $outputfile";
+		$cmd = UPLOAD_COMMAND. " $strJobId $strMovieId $strPrefix $outputfile";
 		exec(sprintf("%s > %s 2>&1 & echo $! >> %s", $cmd, $outputfile, $pidfile));
 		file_put_contents($pidfile, $process_logfile . "\r\n" . $outputfile . "\r\n" , FILE_APPEND);
 		
@@ -462,8 +445,8 @@ class EncodeManager{
 		}
 		
 		//Check if job log file exists in ongoing folder
-		if( file_exists(SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log') === true ){
-			$strLogFilePath = SPORTSLIFE_ONGOING_FOLDER . $strJobId . '.log';
+		if( file_exists(ONGOING_FOLDER . $strJobId . '.log') === true ){
+			$strLogFilePath = ONGOING_FOLDER . $strJobId . '.log';
 		}else{
 			return EncodeManager::RETURN_ERROR_FILENOTFOUND;
 		}

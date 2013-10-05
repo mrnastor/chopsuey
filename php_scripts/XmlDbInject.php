@@ -1,11 +1,8 @@
 <?php
 
-require_once( "../../settings/svr_setting.inc.php");
-require_once( BASE_DIR . "includes/database_handler.inc.php");
-require_once( BASE_DIR . "includes/xmltemplate.inc.php");
-require_once( BASE_DIR . "includes/common.inc.php");
-require_once( BASE_DIR . "includes/utils.inc.php");
-require_once( BASE_DIR . "settings/encode_setting.inc.php");
+require_once(  __DIR__ . "includes/database_handler.inc.php");
+require_once(  __DIR__ . "includes/XmlTemplate.php");
+
 
 class XmlDbInject{
 
@@ -44,13 +41,6 @@ class XmlDbInject{
 	}
 	
 	function __destruct() {
-		if( count($this->arrStatChange) == 4 ){
-			self::sendMail(
-				$this->arrStatChange['new'], 
-				$this->arrStatChange['old'], 
-				$this->arrStatChange['id'], 
-				$this->arrStatChange['table']);
-		}
 		$this->objDb->close();
    	}
 	
@@ -201,34 +191,6 @@ class XmlDbInject{
 		//return preg_match(XmlDbInject::URL_FORMAT, $val);
 	}
 	
-	function validateRelatedNews( $val ){
-		if( self::validateNotNull ( $val ) === false ){
-			return false;
-		}
-		
-		if( self::validateInt ( $val ) === false ){
-			return false;
-		}
-		
-		//Get the current movie_id
-		preg_match('/<content_id>([0-9]+)<\/content_id>/', $this->strRawXml, $match);
-		$movie_id = isset($match[1])?$match[1]:0;
-		
-		//Validate if the news has 3 related movies already
-		$db = $this->objDb;
-		$check_3_related_query = "SELECT B.id, B.title FROM sportslife_movie_related_news as A INNER JOIN sportslife_news as B ON A.news_id = B.id  where A.news_id = '$val' and A.content_id != '$movie_id'";
-		$rs = $db->query($check_3_related_query);
-		if( $rs ){
-			if( $db->num_rows($rs) == 3 ){
-				$arrQueryRes = $db->fetch_assoc($rs);
-				return "関連動画は３個までです : [".$arrQueryRes['id']."] : ".$arrQueryRes['title'];
-			}else{
-				return true;
-			}
-		}else{
-			return false;
-		}
-	}
 	
 	function validateDbID ( $val ){
 		
@@ -404,15 +366,6 @@ class XmlDbInject{
 						case XMLTEMPLATE_VAL_YES_NO: //Validate yes/no values
 							$bValRet = XmlDbInject::validateYesNo($strVal);
 							break;
-						case XMLTEMPLATE_VAL_RELATED_NEWS: //Validate related news value
-							$tempRet = XmlDbInject::validateRelatedNews($strVal);
-							if( $tempRet === true || $tempRet === false ){
-								$bValRet = $tempRet;
-							}else{
-								$bValRet = false;
-								$strCustomErr = $tempRet;
-							} 
-							break;
 						default:
 							break;
 					}
@@ -543,37 +496,6 @@ class XmlDbInject{
 			return $arrRet;
 		}
 
-		if( preg_match( '/status = \'([0-9]+)\'/', $strDbQuery, $match) 
-			&& $this->bUpdate
-			&& ( $this->arrTemplate['table_name'] == 'sportslife_news'
-				|| $this->arrTemplate['table_name'] == 'sportslife_column'
-				|| $this->arrTemplate['table_name'] == 'sportslife_content'
-			)
-		){
-			$new_status = $match[1];
-			preg_match( '/WHERE id = \'([0-9]+)\'/', $strDbQuery, $match);
-			$id = $match[1];
-			$status_query = "SELECT status, title from ". $this->arrTemplate['table_name'] . " WHERE id = $id";
-			$statusRes = $db->query($status_query);
-			if( $statusRes !== false && $db->num_rows($statusRes) == 1){
-				$arrQueryRes = $db->fetch_assoc($statusRes);
-				$old_status = $arrQueryRes['status'];
-				$title = $arrQueryRes['title'];
-			}
-			
-			if( $old_status == 30 && $new_status == 20 ){
-				$arrRet['result'] = 1;
-				$arrRet['message'] = "STATUS変更できませんでした。";
-				$arrRet['error'] = "STATUS変更できませんでした。";
-				return $arrRet;
-			}
-			
-			if( $new_status != $old_status ){
-				$bStatusChanged = true;
-			}
-			write_log("dbinject.log", "DEBUG: MATCHED STATUS query [$new_status] [$id] [$old_status] [".print_r($bStatusChanged,true)."] \n");
-		}
-
 		
 		$objQueryRes = $db->query($strDbQuery);
 		if( XML_DBINJECT_DEBUG ){
@@ -661,73 +583,28 @@ class XmlDbInject{
 		
 		return $arrRet;
 	}
-	
-	function sendMail($new, $old, $id, $base_table){
-		if($old==0){
-			return;
-		}
-	
-		$db = $this->objDb;
-		if( $base_table == 'sportslife_column' ){
-			$item = new models\Column($db);
-			$item->Load($id);
-		}else if( $base_table == 'sportslife_content' ){
-			$item = new models\Movie($db);
-			$item->Load($id);
-		}else{
-			$item = new models\News($db);
-			$item->Load($id);
-		}
-	
-		
-		$email_sql = "SELECT email from sportslife_admin_users where username = '".$this->strOwner."'";
-		$rs = $db->query($email_sql);
-		if( $rs !== false ){
-			$row = $db->fetch_assoc($rs);
-			$to_address = $row['email'];
-			write_log("admin_api.log", "[$to_address] [$email_sql]");
-			
-			if( strlen($to_address) <= 0 ){
-				write_log("admin_api.log", "STATUS CHANGE MAIL: User email not found [$email_sql]");
-				return;
-			}
-			$cc_list = parseCCList(CC_LIST);
-			$headers = "Content-Type: text/plain; charset=UTF-8\r\n";
-			$headers .= "From: ".SPORTSLIFE_ENCODER_MAIL_FROMADDRESS . "\r\n";
-			if( strlen(SPORTSLIFE_ENCODER_MAIL_CC_LIST) > 0 ){
-				$headers .= "Cc: ".SPORTSLIFE_ENCODER_MAIL_CC_LIST . $item->GetCC_List($cc_list) . "\r\n";
-			}
-			$title = $item->GetNotificationEmailTitle($new,$old);
-			
-			if(isset($this->objXml->revert_comment)){
-				$revert_comment = (string)$this->objXml->revert_comment;
-			}else{
-				$revert_comment = "";
-			}
-			
-			$body = $item->GetNotificationEmailBody($new,$old,$this->strOwner,$revert_comment);
-			write_log("mv_dummy_mail.txt", $to_address . "\n" . $headers  ."\n\n" . $title . "\n" . $body . "\n\n-----------\n\n");
-			mail($to_address, '=?utf-8?B?'.base64_encode($title).'?=', $body , $headers);
-		}else{
-			write_log("admin_api.log", "QUERY FAILED [$email_sql]");
-		}
+}
+
+function write_log($filename, $content){
+
+	$skiplist = array("dbinject_detail.log");
+	if( in_array($filename, $skiplist) ){
+		return;
 	}
+	
+	// Get time of request
+	if( ($time = $_SERVER['REQUEST_TIME']) == '') {
+		$time = time();
+	}
+	// Format the date and time
+	date_default_timezone_set('Asia/Tokyo');
+	$date = date("Y-m-d H:i:s", $time);
+	
+	$handle = fopen(BASE_DIR . "logs/" . $filename, 'a');
+	fwrite($handle, $date . ' ' . $content);
+	fclose($handle);
+	@chmod( BASE_DIR . "logs/" . $filename, 0777);
 }
 
 
-function parseCCList($list){
-	$final = array();
-	$x = explode("\n", $list);
-	foreach($x as $row){
-		$v  = explode(",",$row);
-		$id  = array_shift($v);
-		$final[$id] = array();
-		foreach($v as $email){
-			if(trim($email)!=""){
-				$final[$id][] = $email;
-			}
-		}
-	}
-	return $final;
-}
 ?>
